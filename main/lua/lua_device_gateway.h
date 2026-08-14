@@ -41,7 +41,7 @@ private:
     bool Connect();
     void Disconnect();
     void HandleIncoming(const char* data, size_t length, bool binary);
-    void SendHello();
+    bool SendHello();
     void HandleWelcome(const cJSON* data);
     void HandlePrepare(const cJSON* root, const cJSON* data);
     void HandleChunk(const cJSON* root, const cJSON* data);

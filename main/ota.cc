@@ -185,22 +185,6 @@ esp_err_t Ota::CheckVersion() {
         ESP_LOGI(TAG, "No websocket section found!");
     }
 
-    cJSON* lua_gateway = cJSON_GetObjectItem(root, "lua_gateway");
-    if (cJSON_IsObject(lua_gateway)) {
-        Settings settings("lua_gateway", true);
-        const char* keys[] = {"url", "key_id", "secret_b64"};
-        for (const char* key : keys) {
-            cJSON* item = cJSON_GetObjectItem(lua_gateway, key);
-            if (cJSON_IsString(item) && settings.GetString(key) != item->valuestring) {
-                settings.SetString(key, item->valuestring);
-            }
-        }
-        cJSON* enabled = cJSON_GetObjectItem(lua_gateway, "enabled");
-        if (cJSON_IsBool(enabled)) {
-            settings.SetBool("enabled", cJSON_IsTrue(enabled));
-        }
-    }
-
     has_server_time_ = false;
     cJSON *server_time = cJSON_GetObjectItem(root, "server_time");
     if (cJSON_IsObject(server_time)) {

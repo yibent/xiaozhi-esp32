@@ -26,6 +26,7 @@ extern "C" {
 
 namespace {
 constexpr char kTag[] = "LuaGateway";
+constexpr char kGatewayUrl[] = "wss://max.sh.creativone.cn/api/device-ws/v1";
 constexpr size_t kMaxScriptBytes = 65536;
 constexpr size_t kMaxParamsBytes = 4096;
 constexpr size_t kMaxChunkBytes = 1024;
@@ -102,19 +103,6 @@ bool DecodeBase64(const std::string& input, std::string* output) {
            (output->resize(size), true);
 }
 
-std::string EncodeBase64(const std::string& input) {
-    size_t size = 0;
-    mbedtls_base64_encode(nullptr, 0, &size, reinterpret_cast<const unsigned char*>(input.data()),
-                          input.size());
-    std::string output(size, '\0');
-    if (mbedtls_base64_encode(reinterpret_cast<unsigned char*>(output.data()), output.size(), &size,
-                              reinterpret_cast<const unsigned char*>(input.data()),
-                              input.size()) != 0)
-        return "";
-    output.resize(size);
-    return output;
-}
-
 uint32_t Crc32(const std::string& input) {
     uint32_t crc = 0xffffffff;
     for (unsigned char byte : input) {
@@ -149,12 +137,6 @@ bool LuaDeviceGateway::Start() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true))
         return true;
-    Settings settings("lua_gateway", false);
-    if (!settings.GetBool("enabled") || settings.GetString("url").rfind("wss://", 0) != 0) {
-        ESP_LOGI(kTag, "Gateway is not configured");
-        running_.store(false);
-        return true;
-    }
     device_id_ = Board::GetInstance().GetUuid();
     boot_id_ = NewUuid();
     ConfigureCallbacks();
@@ -208,12 +190,6 @@ void LuaDeviceGateway::Run() {
 }
 
 bool LuaDeviceGateway::Connect() {
-    Settings settings("lua_gateway", false);
-    const std::string url = settings.GetString("url");
-    key_id_ = settings.GetString("key_id");
-    secret_b64_ = settings.GetString("secret_b64");
-    if (url.rfind("wss://", 0) != 0 || key_id_.empty() || secret_b64_.empty())
-        return false;
     auto socket = Board::GetInstance().GetNetwork()->CreateWebSocket(2);
     if (socket == nullptr)
         return false;
@@ -235,10 +211,11 @@ bool LuaDeviceGateway::Connect() {
         std::lock_guard<std::mutex> lock(mutex_);
         socket_ptr = websocket_.get();
     }
-    if (!socket_ptr->Connect(url.c_str())) {
+    if (!socket_ptr->Connect(kGatewayUrl)) {
         Disconnect();
         return false;
     }
+    SendHello();
     return true;
 }
 
@@ -299,9 +276,7 @@ void LuaDeviceGateway::HandleIncoming(const char* text, size_t length, bool bina
         return;
     }
     const cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
-    if (type == "hello.challenge")
-        HandleChallenge(root, data);
-    else if (type == "hello.welcome")
+    if (type == "hello.welcome")
         HandleWelcome(data);
     else if (online_.load() && type == "run.prepare")
         HandlePrepare(root, data);
@@ -316,34 +291,14 @@ void LuaDeviceGateway::HandleIncoming(const char* text, size_t length, bool bina
     cJSON_Delete(root);
 }
 
-void LuaDeviceGateway::HandleChallenge(const cJSON* root, const cJSON* data) {
-    std::string nonce, challenge_id;
-    if (!GetString(data, "nonce_b64", &nonce) || !GetString(root, "id", &challenge_id))
-        return;
-    std::string secret;
-    if (!DecodeBase64(secret_b64_, &secret) || secret.size() != 32) {
-        ESP_LOGE(kTag, "Invalid Lua gateway device secret");
-        return;
-    }
+void LuaDeviceGateway::SendHello() {
     const esp_app_desc_t* app = esp_app_get_description();
     std::string firmware = app->version;
-    std::string input = "cubemax-device-ws-v1\n" + nonce + "\n" + device_id_ + "\n" + key_id_ +
-                        "\n" + boot_id_ + "\n" + firmware;
-    std::array<unsigned char, 32> proof{};
-    const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (info == nullptr ||
-        mbedtls_md_hmac(info, reinterpret_cast<const unsigned char*>(secret.data()), secret.size(),
-                        reinterpret_cast<const unsigned char*>(input.data()), input.size(),
-                        proof.data()) != 0)
-        return;
-    std::string proof_bytes(reinterpret_cast<const char*>(proof.data()), proof.size());
     cJSON* hello = cJSON_CreateObject();
     cJSON_AddStringToObject(hello, "device_id", device_id_.c_str());
-    cJSON_AddStringToObject(hello, "key_id", key_id_.c_str());
     cJSON_AddStringToObject(hello, "boot_id", boot_id_.c_str());
     cJSON_AddStringToObject(hello, "firmware_version", firmware.c_str());
     cJSON_AddStringToObject(hello, "lua_runtime", LUA_VERSION);
-    cJSON_AddStringToObject(hello, "proof_b64", EncodeBase64(proof_bytes).c_str());
     cJSON* limits = cJSON_AddObjectToObject(hello, "limits");
     cJSON_AddNumberToObject(limits, "max_script_bytes", kMaxScriptBytes);
     cJSON_AddNumberToObject(limits, "max_params_bytes", kMaxParamsBytes);
@@ -384,7 +339,7 @@ void LuaDeviceGateway::HandleChallenge(const cJSON* root, const cJSON* data) {
         cJSON_AddStringToObject(terminal, "status",
                                 terminal_settings.GetString("last_stat").c_str());
     }
-    SendEnvelope("hello", challenge_id.c_str(), hello);
+    SendEnvelope("hello", nullptr, hello);
 }
 
 void LuaDeviceGateway::HandleWelcome(const cJSON* data) {

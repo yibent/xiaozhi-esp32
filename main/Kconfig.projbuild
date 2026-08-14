@@ -585,6 +585,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_AI_VOX3
         bool "NULLLAB-AI-VOX3"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_FANGTANGCAT_1_54TFT_WIFI
+        bool "方糖猫-1.54-wifi"
+        depends on IDF_TARGET_ESP32S3
 endchoice
 
 choice XIAOZHI_NETWORK_TYPE

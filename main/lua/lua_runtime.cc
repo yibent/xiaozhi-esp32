@@ -6,6 +6,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include "esp_random.h"
 
 #include "application.h"
 #include "board.h"
@@ -24,8 +25,8 @@ namespace {
 
 constexpr char kTag[] = "LuaRuntime";
 
-extern const uint8_t bootstrap_lua_start[] asm("_binary_lua_scripts_bootstrap_lua_start");
-extern const uint8_t bootstrap_lua_end[] asm("_binary_lua_scripts_bootstrap_lua_end");
+extern const uint8_t bootstrap_lua_start[] asm("_binary_bootstrap_lua_start");
+extern const uint8_t bootstrap_lua_end[] asm("_binary_bootstrap_lua_end");
 
 struct SafeLibrary {
     const char* name;
@@ -222,7 +223,7 @@ void LuaRuntime::Run() {
 bool LuaRuntime::InitializeState() {
     allocator_.used = 0;
     allocator_.limit = CONFIG_XIAOZHI_LUA_HEAP_LIMIT_KB * 1024;
-    state_ = lua_newstate(Allocate, &allocator_);
+    state_ = lua_newstate(Allocate, &allocator_, esp_random());
     if (state_ == nullptr) {
         ESP_LOGE(kTag, "Failed to create Lua state");
         return false;

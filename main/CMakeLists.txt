@@ -44,7 +44,7 @@ set(SOURCES "audio/audio_codec.cc"
 
 set(LUA_EMBED_FILES "")
 if(CONFIG_XIAOZHI_LUA_RUNTIME)
-    if(IDF_VERSION VERSION_LESS "6.0.0")
+    if(IDF_VERSION_MAJOR LESS 6)
         message(FATAL_ERROR "XIAOZHI_LUA_RUNTIME requires ESP-IDF 6.0 or newer")
     endif()
     list(APPEND SOURCES

@@ -11,6 +11,7 @@
 #include "text_glyph_payload.h"
 #include "websocket_protocol.h"
 #if CONFIG_XIAOZHI_LUA_RUNTIME
+#include "lua/lua_device_gateway.h"
 #include "lua/lua_runtime.h"
 #endif
 
@@ -50,6 +51,7 @@ Application::Application() {
 
 Application::~Application() {
 #if CONFIG_XIAOZHI_LUA_RUNTIME
+    LuaDeviceGateway::GetInstance().Stop();
     LuaRuntime::GetInstance().Stop();
 #endif
     if (clock_timer_handle_ != nullptr) {
@@ -345,6 +347,11 @@ void Application::HandleActivationDoneEvent() {
     if (!LuaRuntime::GetInstance().Start()) {
         ESP_LOGE(TAG, "Failed to start Lua runtime");
     }
+#if CONFIG_XIAOZHI_LUA_DEVICE_GATEWAY
+    if (!LuaDeviceGateway::GetInstance().Start()) {
+        ESP_LOGE(TAG, "Failed to start Lua device gateway");
+    }
+#endif
 #endif
 
     Schedule([this]() {

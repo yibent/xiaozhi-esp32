@@ -22,6 +22,7 @@ int Log(lua_State* state) {
     const char* message = luaL_checklstring(state, 1, &length);
     luaL_argcheck(state, length <= kMaxLogLength, 1, "message is too long");
     ESP_LOGI("Lua", "%.*s", static_cast<int>(length), message);
+    LuaRuntime::GetInstance().EmitLog(message, length);
     return 0;
 }
 

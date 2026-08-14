@@ -10,6 +10,9 @@
 #include "system_info.h"
 #include "text_glyph_payload.h"
 #include "websocket_protocol.h"
+#if CONFIG_XIAOZHI_LUA_RUNTIME
+#include "lua/lua_runtime.h"
+#endif
 
 #include <driver/gpio.h>
 #include <esp_log.h>
@@ -46,6 +49,9 @@ Application::Application() {
 }
 
 Application::~Application() {
+#if CONFIG_XIAOZHI_LUA_RUNTIME
+    LuaRuntime::GetInstance().Stop();
+#endif
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
@@ -88,6 +94,10 @@ void Application::Initialize() {
     // Add state change listeners
     state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
+#if CONFIG_XIAOZHI_LUA_RUNTIME
+        LuaRuntime::GetInstance().PostEvent("state_changed",
+                                            DeviceStateMachine::GetStateName(new_state));
+#endif
     });
 
     // Start the clock timer to update the status bar
@@ -330,6 +340,12 @@ void Application::HandleActivationDoneEvent() {
     ota_.reset();
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+
+#if CONFIG_XIAOZHI_LUA_RUNTIME
+    if (!LuaRuntime::GetInstance().Start()) {
+        ESP_LOGE(TAG, "Failed to start Lua runtime");
+    }
+#endif
 
     Schedule([this]() {
         // Play the success sound to indicate the device is ready

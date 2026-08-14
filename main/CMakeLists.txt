@@ -42,6 +42,18 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
+set(LUA_EMBED_FILES "")
+if(CONFIG_XIAOZHI_LUA_RUNTIME)
+    if(IDF_VERSION VERSION_LESS "6.0.0")
+        message(FATAL_ERROR "XIAOZHI_LUA_RUNTIME requires ESP-IDF 6.0 or newer")
+    endif()
+    list(APPEND SOURCES
+        "lua/lua_bindings.cc"
+        "lua/lua_runtime.cc"
+    )
+    list(APPEND LUA_EMBED_FILES "lua/scripts/bootstrap.lua")
+endif()
+
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
 # Add board common files
@@ -1050,7 +1062,7 @@ if(CONFIG_BOARD_TYPE_ESP_VOCAT AND IDF_VERSION_MAJOR LESS 6)
     )
 endif()
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${LUA_EMBED_FILES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES

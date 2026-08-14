@@ -945,6 +945,52 @@ config RECEIVE_CUSTOM_MESSAGE
     help
         Enable custom message reception, allow the device to receive custom messages from the server (preferably through the MQTT protocol)
 
+menuconfig XIAOZHI_LUA_RUNTIME
+    bool "Enable Lua runtime"
+    default n
+    depends on (IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4) && SPIRAM
+    help
+        Run trusted Lua control scripts in a dedicated FreeRTOS task. The runtime
+        is intended for ESP-IDF 6.0 or newer and keeps the Lua heap in PSRAM.
+
+if XIAOZHI_LUA_RUNTIME
+
+config XIAOZHI_LUA_HEAP_LIMIT_KB
+    int "Lua heap limit (KB)"
+    default 256
+    range 64 2048
+    help
+        Maximum PSRAM that a Lua state may allocate.
+
+config XIAOZHI_LUA_TASK_STACK_SIZE
+    int "Lua task stack size (bytes)"
+    default 10240
+    range 6144 32768
+
+config XIAOZHI_LUA_TASK_PRIORITY
+    int "Lua task priority"
+    default 3
+    range 1 9
+
+config XIAOZHI_LUA_EVENT_QUEUE_LENGTH
+    int "Lua event queue length"
+    default 8
+    range 2 32
+
+config XIAOZHI_LUA_CALLBACK_TIMEOUT_MS
+    int "Maximum Lua callback time (ms)"
+    default 500
+    range 10 5000
+    help
+        A Lua debug hook aborts a script callback after this time limit.
+
+config XIAOZHI_LUA_HOOK_INSTRUCTION_COUNT
+    int "Instructions between cancellation checks"
+    default 10000
+    range 100 100000
+
+endif
+
 menu "Camera Configuration"
     depends on !IDF_TARGET_ESP32
 

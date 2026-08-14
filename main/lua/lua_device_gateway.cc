@@ -31,6 +31,7 @@ constexpr size_t kMaxScriptBytes = 65536;
 constexpr size_t kMaxParamsBytes = 4096;
 constexpr size_t kMaxChunkBytes = 1024;
 constexpr size_t kMaxMessageBytes = 24576;
+constexpr int kHelloTimeoutMs = 10000;
 
 std::string NewUuid() {
     uint8_t bytes[16];
@@ -184,12 +185,15 @@ void LuaDeviceGateway::Run() {
             vTaskDelay(pdMS_TO_TICKS(250));
         }
         Disconnect();
+        if (running_.load())
+            vTaskDelay(pdMS_TO_TICKS(1000));
     }
     LuaRuntime::GetInstance().SetCallbacks({}, {});
     vTaskDelete(nullptr);
 }
 
 bool LuaDeviceGateway::Connect() {
+    online_.store(false);
     auto socket = Board::GetInstance().GetNetwork()->CreateWebSocket(2);
     if (socket == nullptr)
         return false;
@@ -197,7 +201,10 @@ bool LuaDeviceGateway::Connect() {
     socket->OnData([this](const char* data, size_t length, bool binary) {
         HandleIncoming(data, length, binary);
     });
-    socket->OnDisconnected([this]() { online_.store(false); });
+    socket->OnDisconnected([this]() {
+        ESP_LOGW(kTag, "WebSocket disconnected");
+        online_.store(false);
+    });
     socket->OnError([this](int error) {
         ESP_LOGW(kTag, "WebSocket error %d", error);
         online_.store(false);
@@ -211,11 +218,31 @@ bool LuaDeviceGateway::Connect() {
         std::lock_guard<std::mutex> lock(mutex_);
         socket_ptr = websocket_.get();
     }
+    ESP_LOGI(kTag, "Connecting to %s", kGatewayUrl);
     if (!socket_ptr->Connect(kGatewayUrl)) {
+        ESP_LOGW(kTag, "WebSocket connection failed");
         Disconnect();
         return false;
     }
-    SendHello();
+    if (!SendHello()) {
+        ESP_LOGW(kTag, "Failed to send hello");
+        Disconnect();
+        return false;
+    }
+
+    const int64_t deadline_us = esp_timer_get_time() + kHelloTimeoutMs * 1000LL;
+    while (running_.load() && socket_ptr->IsConnected() && !online_.load() &&
+           esp_timer_get_time() < deadline_us) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!online_.load()) {
+        if (socket_ptr->IsConnected())
+            ESP_LOGW(kTag, "Server welcome timed out");
+        else
+            ESP_LOGW(kTag, "Disconnected before server welcome");
+        Disconnect();
+        return false;
+    }
     return true;
 }
 
@@ -291,7 +318,7 @@ void LuaDeviceGateway::HandleIncoming(const char* text, size_t length, bool bina
     cJSON_Delete(root);
 }
 
-void LuaDeviceGateway::SendHello() {
+bool LuaDeviceGateway::SendHello() {
     const esp_app_desc_t* app = esp_app_get_description();
     std::string firmware = app->version;
     cJSON* hello = cJSON_CreateObject();
@@ -339,7 +366,7 @@ void LuaDeviceGateway::SendHello() {
         cJSON_AddStringToObject(terminal, "status",
                                 terminal_settings.GetString("last_stat").c_str());
     }
-    SendEnvelope("hello", nullptr, hello);
+    return SendEnvelope("hello", nullptr, hello);
 }
 
 void LuaDeviceGateway::HandleWelcome(const cJSON* data) {
@@ -347,6 +374,7 @@ void LuaDeviceGateway::HandleWelcome(const cJSON* data) {
     if (GetInt(data, "heartbeat_interval_ms", &interval))
         heartbeat_interval_ms_ = std::clamp(interval, 5000, 60000);
     online_.store(true);
+    ESP_LOGI(kTag, "Connected, heartbeat interval %d ms", heartbeat_interval_ms_);
     SendStatus();
     Settings settings("lua_run", false);
     if (!settings.GetBool("last_acked", true)) {

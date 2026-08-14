@@ -51,6 +51,7 @@ if(CONFIG_XIAOZHI_LUA_RUNTIME)
         "lua/lua_bindings.cc"
         "lua/lua_device_gateway.cc"
         "lua/lua_runtime.cc"
+        "lua/lua_ui_bindings.cc"
     )
     list(APPEND LUA_EMBED_FILES "lua/scripts/bootstrap.lua")
 endif()

@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include "esp_random.h"
+#include <cJSON.h>
 
 #include "application.h"
 #include "board.h"
@@ -145,6 +147,62 @@ bool LuaRuntime::PostListeningRequest(bool start) {
     return PostAction(action);
 }
 
+bool LuaRuntime::RunScript(const std::string& run_id, const std::string& source,
+                           const std::string& params_json, int timeout_ms) {
+    if (!running_.load() || queue_ == nullptr || run_id.empty() || source.empty()) {
+        return false;
+    }
+    auto request = std::make_unique<RunRequest>();
+    request->run_id = run_id;
+    request->source = source;
+    request->params_json = params_json;
+    request->timeout_ms = timeout_ms;
+    Command command{};
+    command.type = CommandType::Run;
+    command.run_request = request.get();
+    if (xQueueSend(queue_, &command, 0) != pdTRUE) {
+        ESP_LOGW(kTag, "Lua run queue is full");
+        return false;
+    }
+    request.release();
+    return true;
+}
+
+bool LuaRuntime::CancelRun(const std::string& run_id) {
+    std::lock_guard<std::mutex> lock(active_run_mutex_);
+    if (active_run_id_ != run_id || run_id.empty()) {
+        return false;
+    }
+    cancel_requested_.store(true);
+    return true;
+}
+
+std::string LuaRuntime::ActiveRunId() const {
+    std::lock_guard<std::mutex> lock(active_run_mutex_);
+    return active_run_id_;
+}
+
+void LuaRuntime::SetCallbacks(LogCallback on_log, RunFinishedCallback on_finished) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    on_log_ = std::move(on_log);
+    on_finished_ = std::move(on_finished);
+}
+
+void LuaRuntime::EmitLog(const char* message, size_t length) {
+    std::string run_id = ActiveRunId();
+    if (run_id.empty()) {
+        return;
+    }
+    LogCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callback = on_log_;
+    }
+    if (callback != nullptr) {
+        callback(run_id, std::string(message, length));
+    }
+}
+
 void LuaRuntime::TaskEntry(void* arg) { static_cast<LuaRuntime*>(arg)->Run(); }
 
 void* LuaRuntime::Allocate(void* user_data, void* ptr, size_t old_size, size_t new_size) {
@@ -176,7 +234,7 @@ void LuaRuntime::InstructionHook(lua_State* state, lua_Debug* debug) {
     if (runtime == nullptr) {
         return;
     }
-    if (runtime->stop_requested_.load()) {
+    if (runtime->stop_requested_.load() || runtime->cancel_requested_.load()) {
         luaL_error(state, "Lua execution cancelled");
     }
     if (runtime->deadline_us_ > 0 && esp_timer_get_time() > runtime->deadline_us_) {
@@ -209,6 +267,10 @@ void LuaRuntime::Run() {
         if (command.type == CommandType::Stop) {
             break;
         }
+        if (command.type == CommandType::Run) {
+            HandleRun(static_cast<RunRequest*>(command.run_request));
+            continue;
+        }
         if (state_ != nullptr) {
             HandleEvent(command);
         }
@@ -218,6 +280,252 @@ void LuaRuntime::Run() {
     running_.store(false);
     ESP_LOGI(kTag, "Runtime task stopped");
     vTaskDelete(nullptr);
+}
+
+bool LuaRuntime::PushJsonValue(lua_State* state, const char* json, std::string* error) {
+    cJSON* value = cJSON_Parse(json);
+    if (value == nullptr) {
+        *error = "params is not valid JSON";
+        return false;
+    }
+    std::function<bool(const cJSON*)> push = [&](const cJSON* item) {
+        if (cJSON_IsNull(item)) {
+            lua_pushnil(state);
+        } else if (cJSON_IsBool(item)) {
+            lua_pushboolean(state, cJSON_IsTrue(item));
+        } else if (cJSON_IsNumber(item)) {
+            lua_pushnumber(state, item->valuedouble);
+        } else if (cJSON_IsString(item)) {
+            lua_pushstring(state, item->valuestring);
+        } else if (cJSON_IsArray(item)) {
+            lua_createtable(state, cJSON_GetArraySize(item), 0);
+            int index = 1;
+            cJSON* child = nullptr;
+            cJSON_ArrayForEach (child, item) {
+                if (!push(child))
+                    return false;
+                lua_rawseti(state, -2, index++);
+            }
+        } else if (cJSON_IsObject(item)) {
+            lua_createtable(state, 0, 8);
+            cJSON* child = nullptr;
+            cJSON_ArrayForEach (child, item) {
+                if (child->string == nullptr || !push(child))
+                    return false;
+                lua_setfield(state, -2, child->string);
+            }
+        } else {
+            *error = "unsupported params value";
+            return false;
+        }
+        return true;
+    };
+    bool ok = push(value);
+    cJSON_Delete(value);
+    return ok;
+}
+
+bool LuaRuntime::LuaValueToJson(lua_State* state, int index, std::string* output,
+                                std::string* error, int depth) {
+    if (depth > 8) {
+        *error = "result nesting is too deep";
+        return false;
+    }
+    index = lua_absindex(state, index);
+    cJSON* root = nullptr;
+    std::function<cJSON*(int, int)> convert = [&](int value_index, int level) -> cJSON* {
+        if (level > 8)
+            return nullptr;
+        value_index = lua_absindex(state, value_index);
+        switch (lua_type(state, value_index)) {
+            case LUA_TNIL:
+                return cJSON_CreateNull();
+            case LUA_TBOOLEAN:
+                return cJSON_CreateBool(lua_toboolean(state, value_index));
+            case LUA_TNUMBER:
+                return cJSON_CreateNumber(lua_tonumber(state, value_index));
+            case LUA_TSTRING:
+                return cJSON_CreateString(lua_tostring(state, value_index));
+            case LUA_TTABLE: {
+                size_t length = lua_rawlen(state, value_index);
+                bool array = true;
+                size_t count = 0;
+                lua_pushnil(state);
+                while (lua_next(state, value_index) != 0) {
+                    ++count;
+                    bool numeric = lua_isinteger(state, -2) && lua_tointeger(state, -2) >= 1 &&
+                                   static_cast<size_t>(lua_tointeger(state, -2)) <= length;
+                    lua_pop(state, 1);
+                    if (!numeric)
+                        array = false;
+                }
+                cJSON* result =
+                    array && count == length ? cJSON_CreateArray() : cJSON_CreateObject();
+                if (result == nullptr)
+                    return nullptr;
+                if (array && count == length) {
+                    for (size_t i = 1; i <= length; ++i) {
+                        lua_rawgeti(state, value_index, i);
+                        cJSON* child = convert(-1, level + 1);
+                        lua_pop(state, 1);
+                        if (child == nullptr) {
+                            cJSON_Delete(result);
+                            return nullptr;
+                        }
+                        cJSON_AddItemToArray(result, child);
+                    }
+                } else {
+                    lua_pushnil(state);
+                    while (lua_next(state, value_index) != 0) {
+                        if (!lua_isstring(state, -2)) {
+                            lua_pop(state, 2);
+                            cJSON_Delete(result);
+                            return nullptr;
+                        }
+                        const char* key = lua_tostring(state, -2);
+                        cJSON* child = convert(-1, level + 1);
+                        lua_pop(state, 1);
+                        if (child == nullptr) {
+                            cJSON_Delete(result);
+                            return nullptr;
+                        }
+                        cJSON_AddItemToObject(result, key, child);
+                    }
+                }
+                return result;
+            }
+            default:
+                return nullptr;
+        }
+    };
+    root = convert(index, depth);
+    if (root == nullptr) {
+        *error = "result must be JSON-compatible";
+        return false;
+    }
+    char* text = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (text == nullptr) {
+        *error = "unable to encode result";
+        return false;
+    }
+    *output = text;
+    cJSON_free(text);
+    if (output->size() > 16384) {
+        *error = "result is too large";
+        return false;
+    }
+    return true;
+}
+
+void LuaRuntime::HandleRun(RunRequest* request) {
+    std::unique_ptr<RunRequest> holder(request);
+    RunResult result;
+    result.run_id = request->run_id;
+    int64_t started_at = esp_timer_get_time();
+    {
+        std::lock_guard<std::mutex> lock(active_run_mutex_);
+        active_run_id_ = request->run_id;
+    }
+    cancel_requested_.store(false);
+
+    AllocatorContext remote_allocator{};
+    remote_allocator.limit = CONFIG_XIAOZHI_LUA_HEAP_LIMIT_KB * 1024;
+    lua_State* remote = lua_newstate(Allocate, &remote_allocator);
+    if (remote == nullptr) {
+        result.status = "failed";
+        result.error_code = "LUA_MEMORY_ERROR";
+        result.error_message = "failed to create Lua state";
+    } else {
+        *static_cast<LuaRuntime**>(lua_getextraspace(remote)) = this;
+        for (const auto& library : kSafeLibraries) {
+            luaL_requiref(remote, library.name, library.open, 1);
+            lua_pop(remote, 1);
+        }
+        RegisterXiaozhiLuaBindings(remote);
+        const char* blocked[] = {"dofile", "load", "loadfile", "print"};
+        for (const char* name : blocked) {
+            lua_pushnil(remote);
+            lua_setglobal(remote, name);
+        }
+        int load_result = luaL_loadbufferx(remote, request->source.data(), request->source.size(),
+                                           "@remote.lua", "t");
+        if (load_result != LUA_OK) {
+            result.status = "failed";
+            result.error_code = "LUA_COMPILE_ERROR";
+            result.error_message = lua_tostring(remote, -1);
+        } else {
+            deadline_us_ = started_at + static_cast<int64_t>(request->timeout_ms) * 1000;
+            lua_sethook(remote, InstructionHook, LUA_MASKCOUNT,
+                        CONFIG_XIAOZHI_LUA_HOOK_INSTRUCTION_COUNT);
+            int call_result = lua_pcall(remote, 0, 0, 0);
+            lua_sethook(remote, nullptr, 0, 0);
+            deadline_us_ = 0;
+            if (call_result != LUA_OK) {
+                result.status = cancel_requested_.load() ? "stopped" : "failed";
+                result.error_code = cancel_requested_.load() ? "RUN_STOPPED" : "LUA_RUNTIME_ERROR";
+                result.error_message = lua_tostring(remote, -1);
+            } else {
+                lua_getglobal(remote, "main");
+                std::string params_error;
+                if (!lua_isfunction(remote, -1) ||
+                    !PushJsonValue(remote, request->params_json.c_str(), &params_error)) {
+                    lua_settop(remote, 0);
+                    result.status = "failed";
+                    result.error_code = "LUA_ENTRY_ERROR";
+                    result.error_message =
+                        params_error.empty() ? "main(params) is required" : params_error;
+                } else {
+                    deadline_us_ = started_at + static_cast<int64_t>(request->timeout_ms) * 1000;
+                    lua_sethook(remote, InstructionHook, LUA_MASKCOUNT,
+                                CONFIG_XIAOZHI_LUA_HOOK_INSTRUCTION_COUNT);
+                    call_result = lua_pcall(remote, 1, 1, 0);
+                    lua_sethook(remote, nullptr, 0, 0);
+                    deadline_us_ = 0;
+                    if (call_result != LUA_OK) {
+                        result.status = cancel_requested_.load() ? "stopped" : "failed";
+                        result.error_code =
+                            cancel_requested_.load()
+                                ? "RUN_STOPPED"
+                                : (esp_timer_get_time() >
+                                           started_at +
+                                               static_cast<int64_t>(request->timeout_ms) * 1000
+                                       ? "RUN_TIMEOUT"
+                                       : "LUA_RUNTIME_ERROR");
+                        result.error_message = lua_tostring(remote, -1);
+                    } else {
+                        std::string encode_error;
+                        if (!LuaValueToJson(remote, -1, &result.result_json, &encode_error)) {
+                            result.status = "failed";
+                            result.error_code = "LUA_RESULT_ERROR";
+                            result.error_message = encode_error;
+                        } else {
+                            result.status = "succeeded";
+                        }
+                    }
+                }
+            }
+        }
+        lua_close(remote);
+    }
+    result.duration_ms = (esp_timer_get_time() - started_at) / 1000;
+    if (result.status == "failed" && result.error_code == "LUA_RUNTIME_ERROR" &&
+        result.duration_ms >= request->timeout_ms) {
+        result.status = "timed_out";
+        result.error_code = "RUN_TIMEOUT";
+    }
+    {
+        std::lock_guard<std::mutex> lock(active_run_mutex_);
+        active_run_id_.clear();
+    }
+    cancel_requested_.store(false);
+    RunFinishedCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callback = on_finished_;
+    }
+    if (callback != nullptr)
+        callback(result);
 }
 
 bool LuaRuntime::InitializeState() {

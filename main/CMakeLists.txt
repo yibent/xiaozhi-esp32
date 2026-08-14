@@ -49,12 +49,16 @@ if(CONFIG_XIAOZHI_LUA_RUNTIME)
     endif()
     list(APPEND SOURCES
         "lua/lua_bindings.cc"
+        "lua/lua_device_gateway.cc"
         "lua/lua_runtime.cc"
     )
     list(APPEND LUA_EMBED_FILES "lua/scripts/bootstrap.lua")
 endif()
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+if(CONFIG_XIAOZHI_LUA_RUNTIME)
+    list(APPEND INCLUDE_DIRS "lua")
+endif()
 
 # Add board common files
 list(APPEND SOURCES

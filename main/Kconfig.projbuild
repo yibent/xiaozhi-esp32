@@ -955,6 +955,13 @@ menuconfig XIAOZHI_LUA_RUNTIME
 
 if XIAOZHI_LUA_RUNTIME
 
+config XIAOZHI_LUA_DEVICE_GATEWAY
+    bool "Enable CubeMax Lua WebSocket gateway"
+    default y
+    help
+        Connect to the configured WSS endpoint and accept remotely dispatched
+        Lua main(params) tasks.
+
 config XIAOZHI_LUA_HEAP_LIMIT_KB
     int "Lua heap limit (KB)"
     default 256
@@ -983,6 +990,11 @@ config XIAOZHI_LUA_CALLBACK_TIMEOUT_MS
     range 10 5000
     help
         A Lua debug hook aborts a script callback after this time limit.
+
+config XIAOZHI_LUA_RUN_TIMEOUT_MS
+    int "Maximum remotely dispatched Lua run time (ms)"
+    default 60000
+    range 1000 60000
 
 config XIAOZHI_LUA_HOOK_INSTRUCTION_COUNT
     int "Instructions between cancellation checks"

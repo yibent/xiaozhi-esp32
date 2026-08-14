@@ -726,6 +726,13 @@ void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT
 
 void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
 
+void Application::CloseChatChannelAndIdle() {
+    if (protocol_ && protocol_->IsAudioChannelOpened()) {
+        protocol_->CloseAudioChannel();
+    }
+    SetDeviceState(kDeviceStateIdle);
+}
+
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
 
@@ -1212,3 +1219,5 @@ void Application::ResetProtocol() {
         protocol_.reset();
     });
 }
+
+

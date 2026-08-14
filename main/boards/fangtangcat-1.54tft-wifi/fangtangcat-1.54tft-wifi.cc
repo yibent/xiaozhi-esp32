@@ -149,6 +149,10 @@ private:
             }
         });
 
+        boot_button_.OnDoubleClick([this]() {  
+            Application::GetInstance().CloseChatChannelAndIdle();  
+        });
+
     	volume_up_button_.OnPressDown([this]() {
             power_save_timer_->WakeUp();
             Application::GetInstance().StartListening();

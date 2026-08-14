@@ -41,7 +41,7 @@ private:
     bool Connect();
     void Disconnect();
     void HandleIncoming(const char* data, size_t length, bool binary);
-    void HandleChallenge(const cJSON* root, const cJSON* data);
+    void SendHello();
     void HandleWelcome(const cJSON* data);
     void HandlePrepare(const cJSON* root, const cJSON* data);
     void HandleChunk(const cJSON* root, const cJSON* data);
@@ -66,8 +66,6 @@ private:
     Transfer transfer_;
     std::string boot_id_;
     std::string device_id_;
-    std::string key_id_;
-    std::string secret_b64_;
     std::string last_finished_id_;
     std::string last_finished_run_id_;
     int heartbeat_interval_ms_ = 20000;

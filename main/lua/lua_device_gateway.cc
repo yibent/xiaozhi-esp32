@@ -22,6 +22,7 @@ extern "C" {
 }
 
 #include "board.h"
+#include "lua_ui_bindings.h"
 #include "settings.h"
 
 namespace {
@@ -119,8 +120,10 @@ bool HasCapabilities(const cJSON* value) {
         return false;
     cJSON* item = nullptr;
     cJSON_ArrayForEach (item, value) {
-        if (!cJSON_IsString(item) ||
-            (strcmp(item->valuestring, "lua") != 0 && strcmp(item->valuestring, "xiaozhi") != 0))
+        if (!cJSON_IsString(item))
+            return false;
+        if (strcmp(item->valuestring, "lua") != 0 && strcmp(item->valuestring, "xiaozhi") != 0 &&
+            (strcmp(item->valuestring, "display") != 0 || !IsLuaUiAvailable()))
             return false;
     }
     return true;
@@ -335,6 +338,8 @@ bool LuaDeviceGateway::SendHello() {
     cJSON* capabilities = cJSON_AddArrayToObject(hello, "capabilities");
     cJSON_AddItemToArray(capabilities, cJSON_CreateString("lua"));
     cJSON_AddItemToArray(capabilities, cJSON_CreateString("xiaozhi"));
+    if (IsLuaUiAvailable())
+        cJSON_AddItemToArray(capabilities, cJSON_CreateString("display"));
     cJSON* runtime = cJSON_AddObjectToObject(hello, "runtime");
     cJSON_AddStringToObject(runtime, "execution_model", "main_once");
     cJSON_AddStringToObject(runtime, "api_version", "xiaozhi.v1");

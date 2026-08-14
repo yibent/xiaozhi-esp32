@@ -5,6 +5,7 @@
 #include "application.h"
 #include "device_state_machine.h"
 #include "lua_runtime.h"
+#include "lua_ui_bindings.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -78,5 +79,6 @@ const luaL_Reg kXiaozhiFunctions[] = {
 
 void RegisterXiaozhiLuaBindings(lua_State* state) {
     luaL_newlib(state, kXiaozhiFunctions);
+    RegisterLuaUiBindings(state);
     lua_setglobal(state, "xiaozhi");
 }

@@ -75,7 +75,7 @@ private:
         buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
-
+    /*
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
@@ -119,6 +119,52 @@ private:
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
             GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+        });
+    }
+    */
+
+    void InitializeButtons() {
+        boot_button_.OnClick([this]() {
+            power_save_timer_->WakeUp();
+
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
+                EnterWifiConfigMode();
+            }
+        });
+
+        boot_button_.OnPressDown([this]() {
+            power_save_timer_->WakeUp();
+
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() != kDeviceStateStarting) {
+                app.StartListening();
+            }
+        });
+
+    	boot_button_.OnPressUp([]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() != kDeviceStateStarting) {
+                app.StopListening();
+            }
+        });
+
+    	volume_up_button_.OnPressDown([this]() {
+            power_save_timer_->WakeUp();
+            Application::GetInstance().StartListening();
+        });
+
+    	volume_up_button_.OnPressUp([]() {
+            Application::GetInstance().StopListening();
+        });
+
+    	volume_down_button_.OnPressDown([this]() {
+            power_save_timer_->WakeUp();
+            Application::GetInstance().StartListening();
+        });
+
+    	volume_down_button_.OnPressUp([]() {
+            Application::GetInstance().StopListening();
         });
     }
 

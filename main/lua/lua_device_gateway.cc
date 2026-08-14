@@ -15,6 +15,7 @@
 #include <cJSON.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/md.h>
+#include <inttypes.h>
 
 extern "C" {
 #include <lua.h>
@@ -37,9 +38,12 @@ std::string NewUuid() {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     char output[37];
     snprintf(output, sizeof(output),
-             "%02x%02x%02x%02x-%02x-%02x-%02x-%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", bytes[0],
-             bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8],
-             bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
+         "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+         bytes[0], bytes[1], bytes[2], bytes[3],
+         bytes[4], bytes[5],
+         bytes[6], bytes[7],
+         bytes[8], bytes[9],
+         bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
     return output;
 }
 
@@ -516,7 +520,7 @@ void LuaDeviceGateway::HandleChunk(const cJSON* root, const cJSON* data) {
         char expected_crc[9];
         if (!DecodeBase64(b64, &chunk) || chunk.empty() || chunk.size() > kMaxChunkBytes ||
             offset != index * static_cast<int>(transfer_.chunk_bytes) ||
-            (snprintf(expected_crc, sizeof(expected_crc), "%08x", Crc32(chunk)),
+            (snprintf(expected_crc, sizeof(expected_crc), "%08" PRIx32, Crc32(chunk)),
              crc != expected_crc) ||
             transfer_.source.size() + chunk.size() > transfer_.byte_length) {
             SendError(message_id.c_str(), "CHUNK_INVALID", "invalid chunk", true);

@@ -431,7 +431,7 @@ void LuaRuntime::HandleRun(RunRequest* request) {
 
     AllocatorContext remote_allocator{};
     remote_allocator.limit = CONFIG_XIAOZHI_LUA_HEAP_LIMIT_KB * 1024;
-    lua_State* remote = lua_newstate(Allocate, &remote_allocator);
+    lua_State* remote = lua_newstate(Allocate, &remote_allocator, esp_random());
     if (remote == nullptr) {
         result.status = "failed";
         result.error_code = "LUA_MEMORY_ERROR";
